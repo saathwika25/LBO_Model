@@ -1,12 +1,12 @@
 import streamlit as st
 import numpy as np
-import numpy_financial as npf
 import pandas as pd
 import plotly.graph_objects as go
 from io import BytesIO
 
 st.set_page_config(page_title="LBO Deal Studio", layout="wide")
 st.title("💼 LBO Deal Studio")
+
 with st.expander("📘 What is an LBO? (Click to Expand)", expanded=False):
     st.markdown("""
 **Leveraged Buyout (LBO)** is a strategy where an investor (usually a private equity firm) acquires a company using a significant amount of debt.  
@@ -21,7 +21,6 @@ The debt is repaid over time using the company’s cash flows, and the investor 
 **Real Example:**  
 Imagine buying a ₹1000 Cr company using ₹700 Cr debt and ₹300 Cr equity.  
 If you grow the company and sell it for ₹2000 Cr, you repay the debt and keep the profit — often earning 2–3x your money.
-
 """)
 
 with st.expander("📊 Where to Get Inputs From (Data Sources)", expanded=False):
@@ -43,8 +42,17 @@ You can pull most of the financials from:
 | Tax Rate | 25–30% | Standard for Indian companies |
 """)
 
+# ---------- IRR Function ----------
+def calculate_irr(cash_flows, iterations=100):
+    rate = 0.1
+    for _ in range(iterations):
+        denominator = [(1 + rate) ** i for i in range(len(cash_flows))]
+        value = sum([cf / d for cf, d in zip(cash_flows, denominator)])
+        derivative = sum([-i * cf / ((1 + rate) ** (i + 1)) for i, cf in enumerate(cash_flows)])
+        rate -= value / derivative
+    return rate
 
-# ---------------- Real Company Autofill ----------------
+# ---------- Autofill ----------
 company_data = {
     "DMart": {
         "purchase_price": 70000,
@@ -66,7 +74,7 @@ company_data = {
     }
 }
 
-# ---------------- Sidebar Inputs ----------------
+# ---------- Sidebar Inputs ----------
 st.sidebar.header("📊 Deal Setup")
 company_choice = st.sidebar.selectbox("🔍 Load Company Template", ["None"] + list(company_data.keys()))
 
@@ -82,79 +90,27 @@ if company_choice != "None":
 
 company_name = st.sidebar.text_input("Target Company Name", "SampleCo")
 
-purchase_price = st.sidebar.number_input(
-    "Purchase Price (₹ Cr)", value=st.session_state.get("purchase_price", 1000.0),
-    help="Total acquisition price including debt, equity, and fees."
-)
+purchase_price = st.sidebar.number_input("Purchase Price (₹ Cr)", value=st.session_state.get("purchase_price", 1000.0))
+transaction_fee_pct = st.sidebar.number_input("Transaction Fee (%)", value=2.0) / 100
+entry_ebitda = st.sidebar.number_input("Entry EBITDA (₹ Cr)", value=st.session_state.get("entry_ebitda", 100.0))
+entry_multiple = st.sidebar.number_input("Entry EBITDA Multiple (x)", value=st.session_state.get("entry_multiple", 8.0))
+holding_period = st.sidebar.slider("Holding Period (Years)", 1, 10, 5)
 
-transaction_fee_pct = st.sidebar.number_input(
-    "Transaction Fee (%)", value=2.0,
-    help="One-time deal cost (legal, advisory, etc). Usually 1–3%."
-) / 100
-
-entry_ebitda = st.sidebar.number_input(
-    "Entry EBITDA (₹ Cr)", value=st.session_state.get("entry_ebitda", 100.0),
-    help="Operating earnings before depreciation and interest."
-)
-
-entry_multiple = st.sidebar.number_input(
-    "Entry EBITDA Multiple (x)", value=st.session_state.get("entry_multiple", 8.0),
-    help="Valuation multiple. Industry avg: 6x–12x."
-)
-
-holding_period = st.sidebar.slider(
-    "Holding Period (Years)", 1, 10, 5,
-    help="How long will the company be held before exit?"
-)
-
-# ---------------- Financing Assumptions ----------------
+# ---------- Financing ----------
 st.sidebar.header("💰 Financing Assumptions")
+debt_ratio = st.sidebar.slider("Debt-to-Equity Ratio (%)", 0, 100, value=st.session_state.get("debt_ratio", 70))
+interest_rate = st.sidebar.number_input("Interest Rate on Debt (%)", value=8.0) / 100
+amort_years = st.sidebar.number_input("Amortization Period (Years)", value=5)
+tax_rate = st.sidebar.number_input("Corporate Tax Rate (%)", value=st.session_state.get("tax_rate", 25.0)) / 100
 
-debt_ratio = st.sidebar.slider(
-    "Debt-to-Equity Ratio (%)", 0, 100,
-    value=st.session_state.get("debt_ratio", 70),
-    help="How much of purchase is financed with debt?"
-)
-
-interest_rate = st.sidebar.number_input(
-    "Interest Rate on Debt (%)", value=8.0,
-    help="Annual interest rate on debt."
-) / 100
-
-amort_years = st.sidebar.number_input(
-    "Amortization Period (Years)", value=5,
-    help="Loan repayment duration (equal annual principal)."
-)
-
-tax_rate = st.sidebar.number_input(
-    "Corporate Tax Rate (%)", value=st.session_state.get("tax_rate", 25.0),
-    help="Corporate tax rate. Usually 25–30% in India."
-) / 100
-
-# ---------------- Operating Assumptions ----------------
+# ---------- Operations ----------
 st.sidebar.header("📈 Operating Assumptions")
+ebitda_margin = st.sidebar.number_input("EBITDA Margin (%)", value=st.session_state.get("ebitda_margin", 20.0)) / 100
+capex_pct = st.sidebar.number_input("CapEx as % of Revenue", value=st.session_state.get("capex_pct", 10.0)) / 100
+depreciation_pct = st.sidebar.number_input("Depreciation as % of CapEx", value=60.0) / 100
+wc_pct = st.sidebar.number_input("Working Capital Change (% of Revenue)", value=5.0) / 100
 
-ebitda_margin = st.sidebar.number_input(
-    "EBITDA Margin (%)", value=st.session_state.get("ebitda_margin", 20.0),
-    help="EBITDA ÷ Revenue. Use historical average."
-) / 100
-
-capex_pct = st.sidebar.number_input(
-    "CapEx as % of Revenue", value=st.session_state.get("capex_pct", 10.0),
-    help="Annual capital expenditure as % of revenue."
-) / 100
-
-depreciation_pct = st.sidebar.number_input(
-    "Depreciation as % of CapEx", value=60.0,
-    help="Estimate depreciation based on CapEx assets life."
-) / 100
-
-wc_pct = st.sidebar.number_input(
-    "Working Capital Change (% of Revenue)", value=5.0,
-    help="Yearly change in working capital needs."
-) / 100
-
-# ---------------- Scenario Modeling ----------------
+# ---------- Scenarios ----------
 st.sidebar.header("🔁 Scenario Modeling")
 scenario_inputs = {
     "Base Case": {
@@ -171,7 +127,7 @@ scenario_inputs = {
     }
 }
 
-# ---------------- LBO Model Function ----------------
+# ---------- LBO Logic ----------
 def run_lbo(growth_rate, exit_multiple):
     fee = purchase_price * transaction_fee_pct
     total_price = purchase_price + fee
@@ -188,12 +144,10 @@ def run_lbo(growth_rate, exit_multiple):
         depreciation = capex * depreciation_pct
         wc_change = revenue * wc_pct
         interest = debt_remaining * interest_rate
-
         taxable_income = ebitda - interest - depreciation
         tax = max(taxable_income, 0) * tax_rate
         net_income = taxable_income - tax
         fcf = net_income + depreciation - capex - wc_change
-
         amort = debt / amort_years if year <= amort_years else 0
         debt_remaining = max(debt_remaining - amort, 0)
         cash_flows.append(fcf)
@@ -210,17 +164,16 @@ def run_lbo(growth_rate, exit_multiple):
             "Debt Remaining": debt_remaining
         })
 
-    # Exit
     exit_ebitda = entry_ebitda * ((1 + growth_rate) ** holding_period)
     exit_value = exit_ebitda * exit_multiple
     proceeds = exit_value - debt_remaining
     cash_flows[-1] += proceeds
 
-    irr = npf.irr(cash_flows) * 100
+    irr = calculate_irr(cash_flows) * 100
     moic = proceeds / equity
     return irr, moic, pd.DataFrame(table)
 
-# ---------------- Run All Scenarios ----------------
+# ---------- Output Section ----------
 st.subheader(f"📈 IRR & MOIC Results for {company_name}")
 results = []
 tables = {}
@@ -232,7 +185,7 @@ for scenario, params in scenario_inputs.items():
 df_results = pd.DataFrame(results)
 st.dataframe(df_results.style.format({"IRR (%)": "{:.2f}", "MOIC (x)": "{:.2f}"}), use_container_width=True)
 
-# ---------------- IRR Bar Chart ----------------
+# ---------- Chart ----------
 st.subheader("📊 IRR by Scenario")
 fig = go.Figure()
 fig.add_trace(go.Bar(
@@ -243,12 +196,12 @@ fig.add_trace(go.Bar(
 fig.update_layout(template="plotly_white", yaxis_title="IRR (%)")
 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- Cash Flow Table ----------------
+# ---------- Cash Flow Table ----------
 st.subheader("🧾 Cash Flow Table (Base Case)")
 base_table = tables["Base Case"]
 st.dataframe(base_table.style.format("{:.2f}"), use_container_width=True)
 
-# ---------------- Excel Export ----------------
+# ---------- Excel Export ----------
 def to_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -258,7 +211,7 @@ def to_excel(df):
 excel_data = to_excel(base_table)
 st.download_button("📥 Download Excel", data=excel_data, file_name="LBO_CashFlows_BaseCase.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ---------------- Sensitivity Table ----------------
+# ---------- Sensitivity Table ----------
 st.subheader("📊 IRR Sensitivity (Exit Multiple × Holding Period)")
 exit_range = np.arange(8, 16)
 hold_range = np.arange(3, 11)
@@ -273,9 +226,9 @@ for h in hold_range:
         total_equity = purchase_price * (1 - debt_ratio / 100) + (purchase_price * transaction_fee_pct)
         cash_flows = [-total_equity]
         for y in range(h):
-            cash_flows.append(entry_ebitda * ((1 + base_growth) ** y))  # dummy
+            cash_flows.append(entry_ebitda * ((1 + base_growth) ** y))
         cash_flows[-1] += exit_val
-        irr_val = npf.irr(cash_flows) * 100
+        irr_val = calculate_irr(cash_flows) * 100
         row.append(irr_val)
     irr_grid.append(row)
 
